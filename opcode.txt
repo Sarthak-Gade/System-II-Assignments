@@ -1,0 +1,785 @@
+﻿Group Assignment:
+
+
+Group Members:
+1. Sarthak Haribhau Gade (25111015)
+2. Sandesh Lalaso Mahanwar (25111035)
+3. Jayesh Hiralal Patil (25111026) 
+
+
+
+
+Instruction Byte Diagram:          
+
+
+
+
+-- OPCODE: A primary opcode can be 1, 2, or 3 bytes in length.
+-- MOD R/M: Takes total 1 byte.
+        The Mod r/m byte is:
+
+
+Mod 
+	REG/ OPCODE
+	R/M
+	2 bits
+	3 bits
+	3 bits
+	 – SIB: Takes total 1 byte
+            The SIB byte will be:
+
+
+Scale 
+	Index 
+	Base
+	2 bits
+	3 bits
+	3 bits
+	
+
+-- Displacement: If a displacement is required, it can be 1, 2, or 4 bytes.
+-- Immediate: An immediate operand can be 1, 2 or 4 bytes.
+
+
+
+
+
+
+
+
+Encoding Table : 
+32 bit addressing  forms with mod r/m byte
+
+
+REG
+	Register
+	000
+	EAX
+	001
+	ECX
+	010
+	EDX
+	011
+	EBX
+	100
+	ESP
+	101
+	EBP
+	110
+	ESI
+	111
+	EDI
+	
+
+The Mod r/m byte is:
+
+
+Mod 
+	REG/ OPCODE
+	R/M
+	2 bits
+	3 bits
+	3 bits
+	
+
+
+
+MOD
+	Meaning
+	Displacement
+	00
+	Memory Addressing
+	None
+	01
+	Memory Addressing
+	disp8
+	10
+	Memory Addressing
+	disp32
+	11
+	Register-Direct
+	None
+	
+
+
+
+
+
+Mod = 00, [ Memory, No displacement ]
+
+
+Effective Address
+	R/M
+	000
+	001
+	010
+	011
+	100
+	101
+	110
+	111
+	[EAX]
+	000
+	00
+	08
+	10
+	18
+	20
+	28
+	30
+	38
+	[ECX]
+	001
+	01
+	09
+	11
+	19
+	21
+	29
+	31
+	39
+	[EDX]
+	010
+	02
+	0A
+	12
+	1A
+	22
+	2A
+	32
+	3A
+	[EBX]
+	011
+	03
+	0B
+	13
+	1B
+	23
+	2B
+	33
+	3B
+	SIB
+	100
+	04
+	0C
+	14
+	1C
+	24
+	2C
+	34
+	3C
+	[disp32]
+	101
+	05
+	0D
+	15
+	1D
+	25
+	2D
+	35
+	3D
+	[ESI]
+	110
+	06
+	0E
+	16
+	1E
+	26
+	2E
+	36
+	3E
+	[EDI]
+	111
+	07
+	0F
+	17
+	1F
+	27
+	2F
+	37
+	3F
+	
+
+
+
+
+
+
+
+Mod = 01, [Memory, 8 bit displacement]
+                 
+Effective Address
+	R/M
+	000
+	001
+	010
+	011
+	100
+	101
+	110
+	111
+	[EAX+disp8]
+	000
+	40
+	48
+	50
+	58
+	60
+	68
+	70
+	78
+	[ECX+disp8]
+	001
+	41
+	49
+	51
+	59
+	61
+	69
+	71
+	79
+	[EDX+disp8]
+	010
+	42
+	4A
+	52
+	5A
+	62
+	6A
+	72
+	7A
+	[EBX+disp8]
+	011
+	43
+	4B
+	53
+	5B
+	63
+	6B
+	73
+	7B
+	SIB+disp8
+	100
+	44
+	4C
+	54
+	5C
+	64
+	6C
+	74
+	7C
+	[EBP+disp8]
+	101
+	45
+	4D
+	55
+	5D
+	65
+	6D
+	75
+	7D
+	[ESI+disp8]
+	110
+	46
+	4E
+	56
+	5E
+	66
+	6E
+	76
+	7E
+	[EDI+disp8]
+	111
+	47
+	4F
+	57
+	5F
+	67
+	6F
+	77
+	7F
+	
+
+Mod = 10, [Memory ,32 bit displacement]
+
+
+Effective 
+Address
+	R/M
+	000
+	001
+	010
+	011
+	100
+	101
+	110
+	111
+	[EAX+disp32]
+	000
+	80
+	88
+	90
+	98
+	A0
+	A8
+	B0
+	B8
+	[ECX+disp32]
+	001
+	81
+	89
+	91
+	99
+	A1
+	A9
+	B1
+	B9
+	[EDX+disp32]
+	010
+	82
+	8A
+	92
+	9A
+	A2
+	AA
+	B2
+	BA
+	[EBX+disp32]
+	011
+	83
+	8B
+	93
+	9B
+	A3
+	AB
+	B3
+	BB
+	SIB+disp32
+	100
+	84
+	8C
+	94
+	9C
+	A4
+	AC
+	B4
+	BC
+	[EBP+disp32]
+	101
+	85
+	8D
+	95
+	9D
+	A5
+	AD
+	B5
+	BD
+	[ESI+disp32]
+	110
+	86
+	8E
+	96
+	9E
+	A6
+	AE
+	B6
+	BE
+	[EDI+disp32]
+	111
+	87
+	8F
+	97
+	9F
+	A7
+	AF
+	B7
+	BF
+	Mod=11,[Memory,Register-direct]
+
+
+Effective Address
+	R/M
+	000
+	001
+	010
+	011
+	100
+	101
+	110
+	111
+	EAX
+	000
+	C0
+	C8
+	D0
+	D8
+	E0
+	E8
+	F0
+	F8
+	ECX
+	001
+	C1
+	C9
+	D1
+	D9
+	E1
+	E9
+	F1
+	F9
+	EDX
+	010
+	C2
+	CA
+	D2
+	DA
+	E2
+	EA
+	F2
+	FA
+	EBX
+	011
+	C3
+	CB
+	D3
+	DB
+	E3
+	EB
+	F3
+	FB
+	ESP
+	100
+	C4
+	CC
+	D4
+	DC
+	E4
+	EC
+	F4
+	FC
+	EBP
+	101
+	C5
+	CD
+	D5
+	DD
+	E5
+	ED
+	F5
+	FD
+	ESI
+	110
+	C6
+	CE
+	D6
+	DE
+	E6
+	EE
+	F6
+	FE
+	EDI
+	111
+	C7
+	CF
+	D7
+	DF
+	E7
+	EF
+	F7
+	FF
+	932 Bit Addressing with SIB
+
+
+Scale
+	Index
+	Base
+	2 bits
+	3 bits
+	3 bits
+	
+
+
+
+Scale
+	[Index Displacement]
+	00
+	x1
+	01
+	x2
+	10
+	x4
+	11
+	x8
+	
+
+
+
+SIB Index Table :
+
+
+Bits 
+	Register
+	000
+	EAX
+	001
+	ECX
+	010
+	EDX
+	011
+	EBX
+	100
+	No Index
+	101
+	EBP
+	110
+	ESI
+	111
+	EDI
+	                 
+SIB Base Table :
+
+
+Bits
+	Register
+	000
+	EAX
+	001
+	ECX
+	010
+	EDX
+	011
+	EBX
+	100
+	ESP
+	101
+	*EBP
+	110
+	ESI
+	111
+	EDI
+	
+
+ Opcode :
+
+
+Instruction Name
+	Opcode
+	Oprand
+	Register
+	Memory
+	Imm
+	Mod R/M
+	Imm/
+Offset
+	MOV
+	C7
+	r/m32,imm32
+	1/0
+	1/0
+	1
+	/0
+	imm32
+	MOV
+	89
+	r/m32,r32
+	1
+	1/0
+	0
+	/r
+	–
+	MOV
+	8B
+	r32,r/m32
+	1
+	1/0
+	0
+	/r
+	–
+	ADD
+	83
+	r/m32,imm32
+	1/0
+	1/0
+	1
+	/0
+	imm32
+	ADD
+	81
+	r/m32,imm8
+	1/0
+	1/0
+	1
+	/0
+	imm8
+	ADD
+	01
+	r/m32,r32
+	1
+	1/0
+	0
+	/r
+	–
+	SUB
+	83
+	r/m32,imm8
+	1/0
+	1/0
+	1
+	/5
+	imm8
+	SUB
+	81
+	r/m32,imm32
+	1/0
+	1/0
+	1
+	/5
+	imm32
+	SUB
+	29
+	r/m32,r32
+	1
+	1/0
+	0
+	/r
+	–
+	DEV
+	F7
+	r/m32
+	0
+	1/0
+	0
+	/6
+	–
+	INC
+	FF
+	r/m32
+	0
+	1/0
+	0
+	/0
+	–
+	DEC
+	FF
+	r/m32
+	0
+	1/0
+	0
+	/1
+	–
+	PUSH
+	50+rd
+	r32
+	1
+	0
+	0
+	–
+	–
+	PUSH
+	FF
+	r/m32
+	0
+	1/0
+	0
+	/6
+	–
+	POP
+	58+rd
+	r32
+	1
+	0
+	0
+	–
+	–
+	POP
+	8F
+	r/m32
+	0
+	1/0
+	0
+	/0
+	–
+	JMP
+	EB
+	rel8
+	0
+	0
+	0
+	–
+	rel8
+	JMP
+	E9
+	rel32
+	0
+	0
+	0
+	–
+	rel32
+	JNE
+	75
+	rel8
+	0
+	0
+	0
+	–
+	rel8
+	JNE
+	0F85
+	rel32
+	0
+	0
+	0
+	–
+	rel32
+	RET
+	C3
+	–
+	0
+	0
+	0
+	–
+	–
+	
+
+( *1 = Present in instruction or required,
+*0= Not required in instruction or not present,
+*0/1= either present or not (both possibilities)if second combined operand will be used first will be skipped.)
+
+
+#Assembler Directives :
+1. section .text → Selects the code section.
+2. section .data →Selects the initialized data section.
+
+
+#Data Directives :
+
+
+Directive
+	Data Size
+	Encoding
+	DB
+	8 bits
+	Direct byte
+	DW
+	16 bits
+	Little-Endian
+	DD
+	32 bits
+	Little Endian
+	
+
+
+
+
+
+
+
+
+
+GitHub Links:
+1. Gade Sarthak (25111015)
+https://github.com/Sarthak-Gade
+2. Mahanwar Sandesh(25111035)
+https://github.com/sandesh8736
+3. Jayesh Hiralal Patil(25111026)
+https://github.com/jayeshpatil2003
