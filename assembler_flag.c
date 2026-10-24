@@ -1,0 +1,1289 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#define MAX_LINE 512
+#define MAX_OP 200
+#define MAX_BYTES 64
+
+typedef struct {
+    char name[32];
+    char opcode[32];
+    char form[64];
+    char field[16];
+    char imm[16];
+} Op;
+
+typedef struct {
+    char kind[16];
+    char text[128];
+    int reg;
+    int base;
+    int index;
+    int scale;
+    int disp;
+    int has_disp;
+} Operand;
+
+typedef struct {
+    unsigned char bytes[MAX_BYTES];
+    int count;
+} Code;
+
+typedef struct {
+    char name[128];
+    int size;
+    char value[256];
+    char section;             /* D = .data, B = .bss */
+    unsigned int address;     /* offset relative to the section */
+    char status;              /* D = defined, U = undefined/external */
+    int is_instruction;       /* internal flag: instruction listing row */
+} Symbol;
+
+#define MAX_SYMBOLS 1000
+Symbol symbols[MAX_SYMBOLS];
+int nsymbols = 0;
+
+Op ops[MAX_OP];
+int nop = 0;
+
+int regcode[8] = {0,1,2,3,4,5,6,7};
+
+const char *regs[8] = {
+    "eax","ecx","edx","ebx",
+    "esp","ebp","esi","edi"
+};
+
+void trim(char *s) {
+    int i = 0;
+    int n;
+    while (isspace((unsigned char)s[i]))
+        i++;
+    if (i)
+        memmove(s,s+i,strlen(s+i)+1);
+    n = strlen(s);
+    while (n && isspace((unsigned char)s[n-1]))
+        s[--n] = '\0';
+}
+
+void lower(char *s) {
+    int i;
+    for (i=0;s[i];i++)
+        s[i] = tolower((unsigned char)s[i]);
+}
+
+void remove_spaces(char *s) {
+    char t[MAX_LINE];
+    int i,j=0;
+    for (i=0;s[i];i++) {
+        if (!isspace((unsigned char)s[i]))
+            t[j++] = s[i];
+    }
+    t[j] = '\0';
+    strcpy(s,t);
+}
+
+void remove_comment(char *s) {
+    int quote = 0;
+    int i;
+    for (i=0;s[i];i++) {
+        if (s[i] == '"')
+            quote = !quote;
+        else if (s[i] == ';' && !quote) {
+            s[i] = '\0';
+            break;
+        }
+    }
+}
+
+int reg_id(const char *s) {
+    char t[32];
+    int i;
+
+    strcpy(t,s);
+    trim(t);
+    lower(t);
+    for (i=0;i<8;i++) {
+        if (!strcmp(t,regs[i]))
+            return i;
+    }
+    return -1;
+}
+
+int is_number(const char *s) {
+    char *end;
+    if (!s || !*s)
+        return 0;
+    strtol(s,&end,0);
+    return *end == '\0';
+}
+
+long get_number(const char *s) {
+    return strtol(s,NULL,0);
+}
+
+void init_operand(Operand *o) {
+    memset(o,0,sizeof(Operand));
+
+    o->reg = -1;
+    o->base = -1;
+    o->index = -1;
+    o->scale = 1;
+}
+int parse_memory(char *s,Operand *o) {
+    char t[128];
+    char in[128];
+    char *l,*r,*token;
+
+    strcpy(t,s);
+    trim(t);
+    lower(t);
+    l = strchr(t,'[');
+    r = strrchr(t,']');
+    if (!l || !r || r <= l)
+        return 0;
+    *r = '\0';
+    strcpy(in,l+1);
+
+    o->base = -1;
+    o->index = -1;
+    o->scale = 1;
+    o->disp = 0;
+    o->has_disp = 0;
+    for (int i=0;in[i];i++) {
+        if (in[i] == '-')
+            in[i] = '+';
+    }
+    token = strtok(in,"+");
+    while (token) {
+        trim(token);
+        if (*token) {
+            char *star = strchr(token,'*');
+            if (star) {
+                int r;
+                *star = '\0';
+                trim(token);
+                trim(star+1);
+                r = reg_id(token);
+                if (r >= 0 && is_number(star+1)) {
+                    o->index = r;
+                    o->scale = get_number(star+1);
+                }
+            }
+            else {
+                int r = reg_id(token);
+                if (r >= 0) {
+                    o->base = r;
+                }
+                else if (is_number(token)) {
+                    o->disp = get_number(token);
+                    o->has_disp = 1;
+                }
+                else {
+                    o->disp = 0;
+                    o->has_disp = 1;
+                }
+            }
+        }
+        token = strtok(NULL,"+");
+    }
+    strcpy(o->kind,"MEM");
+    return 1;
+}
+void parse_operand(char *s,Operand *o) {
+    char t[128];
+    init_operand(o);
+    strcpy(t,s);
+    trim(t);
+    lower(t);
+    if (!strncmp(t,"dword",5)) {
+        memmove(t,t+5,strlen(t+5)+1);
+        trim(t);
+    }
+    else if (!strncmp(t,"word",4)) {
+        memmove(t,t+4,strlen(t+4)+1);
+        trim(t);
+    }
+    else if (!strncmp(t,"byte",4)) {
+        memmove(t,t+4,strlen(t+4)+1);
+        trim(t);
+    }
+    strcpy(o->text,t);
+    if (strchr(t,'[')) {
+        if (parse_memory(t,o))
+            return;
+    }
+    o->reg = reg_id(t);
+    if (o->reg >= 0) {
+        strcpy(o->kind,"REG");
+        return;
+    }
+    if (is_number(t)) {
+        strcpy(o->kind,"IMM");
+        return;
+    }
+    strcpy(o->kind,"SYM");
+}
+
+void split_operands(char *s,char *a,char *b) {
+    int bracket=0;
+    int quote=0;
+    int i;
+    a[0] = '\0';
+    b[0] = '\0';
+    for (i=0;s[i];i++) {
+        if (s[i] == '"')
+            quote = !quote;
+        else if (!quote) {
+            if (s[i] == '[')
+                bracket++;
+            if (s[i] == ']')
+                bracket--;
+            if (s[i] == ',' && bracket == 0) {
+                s[i] = '\0';
+                strcpy(a,s);
+                strcpy(b,s+i+1);
+                trim(a);
+                trim(b);
+                return;
+            }
+        }
+    }
+    strcpy(a,s);
+    trim(a);
+}
+int parse_instruction(char *line,char *mn,char *a,char *b) {
+    char t[MAX_LINE];
+    char rest[MAX_LINE] = "";
+    char *colon;
+    mn[0] = '\0';
+    a[0] = '\0';
+    b[0] = '\0';
+    strcpy(t,line);
+    trim(t);
+    if (!t[0])
+        return 0;
+    colon = strchr(t,':');
+    if (colon) {
+        memmove(t,colon+1,strlen(colon+1)+1);
+        trim(t);
+    }
+    if (sscanf(t,"%31s %511[^\n]",mn,rest) < 1)
+        return 0;
+    lower(mn);
+    if (rest[0])
+        split_operands(rest,a,b);
+    return 1;
+}
+void load_instruction_set(const char *file) {
+    FILE *fp;
+    char line[MAX_LINE];
+    fp = fopen(file,"r");
+    if (!fp) {
+        perror(file);
+        exit(1);
+    }
+    while (fgets(line,sizeof(line),fp)) {
+        char name[32],opcode[32],form[64];
+        char c4[32],c5[32],c6[32],field[16],imm[16];
+        char bits[32],regname[32];
+        int n;
+
+        trim(line);
+        if (!line[0])
+            continue;
+        if (sscanf(line,"| %31[^|] | %31[^|] |",bits,regname) == 2) {
+            trim(bits);
+            trim(regname);
+            lower(regname);
+            if (strlen(bits)==3 && (bits[0]=='0'||bits[0]=='1') && (bits[1]=='0'||bits[1]=='1') && (bits[2]=='0'||bits[2]=='1')) {
+                int r = reg_id(regname);
+                if (r >= 0)
+                    regcode[r] = strtol(bits,NULL,2);
+                continue;
+            }
+        }
+        n = sscanf(line,"| %31[^|] | %31[^|] | %63[^|] | %31[^|] | %31[^|] | %31[^|] | %15[^|] | %15[^|] |",name,opcode,form,c4,c5,c6,field,imm);
+        if (n == 8) {
+            trim(name);
+            trim(opcode);
+            trim(form);
+            trim(field);
+            trim(imm);
+            lower(name);
+            remove_spaces(form);
+            if (!strcmp(name,"instruction"))
+                continue;
+            if (nop < MAX_OP) {
+                strcpy(ops[nop].name,name);
+                strcpy(ops[nop].opcode,opcode);
+                strcpy(ops[nop].form,form);
+                strcpy(ops[nop].field,field);
+                strcpy(ops[nop].imm,imm);
+                nop++;
+            }
+        }
+    }
+    fclose(fp);
+}
+int value_operand(Operand *o) {
+    return !strcmp(o->kind,"IMM") || !strcmp(o->kind,"SYM");
+}
+
+int match_form(const Op *op,Operand *a,Operand *b,int two) {
+    char form[64];
+    strcpy(form,op->form);
+    trim(form);
+    remove_spaces(form);
+    lower(form);
+
+    if (!two) {
+        if (!strcmp(form,"-"))
+            return 1;
+
+        if (!strcmp(form,"r32"))
+            return !strcmp(a->kind,"REG");
+
+        if (!strcmp(form,"r/m32"))
+            return !strcmp(a->kind,"REG") || !strcmp(a->kind,"MEM");
+
+        if (!strcmp(form,"imm8") || !strcmp(form,"imm32"))
+            return value_operand(a);
+
+        if (!strcmp(form,"rel8") || !strcmp(form,"rel32"))
+            return value_operand(a);
+        return 0;
+    }
+
+    if (!strcmp(form,"r/m32,r32"))
+        return (!strcmp(a->kind,"REG") || !strcmp(a->kind,"MEM")) && !strcmp(b->kind,"REG");
+
+    if (!strcmp(form,"r32,r/m32"))
+        return !strcmp(a->kind,"REG") && (!strcmp(b->kind,"REG") || !strcmp(b->kind,"MEM"));
+
+    if (!strcmp(form,"r/m32,imm8"))
+        return (!strcmp(a->kind,"REG") || !strcmp(a->kind,"MEM")) && value_operand(b);
+
+    if (!strcmp(form,"r/m32,imm32"))
+        return (!strcmp(a->kind,"REG") || !strcmp(a->kind,"MEM")) && value_operand(b);
+
+    if (!strcmp(form,"r32,imm8"))
+        return !strcmp(a->kind,"REG") && value_operand(b);
+
+    if (!strcmp(form,"r32,imm32"))
+        return !strcmp(a->kind,"REG") && value_operand(b);
+
+    if (!strcmp(form,"eax,imm32"))
+        return !strcmp(a->kind,"REG") && a->reg == 0 && value_operand(b);
+    return 0;
+}
+int fits_imm8(Operand *o) {
+    long v;
+    if (strcmp(o->kind,"IMM"))
+        return 0;
+    v = get_number(o->text);
+    return v >= -128 && v <= 127;
+}
+const Op *find_instruction(const char *mn,Operand *a,Operand *b,int two) {
+    int i;
+    for (i=0;i<nop;i++) {
+        if (!strcmp(ops[i].name,mn) && strstr(ops[i].opcode,"+rd") && match_form(&ops[i],a,b,two))
+            return &ops[i];
+    }
+    if (two && fits_imm8(b)) {
+        for (i=0;i<nop;i++) {
+            if (!strcmp(ops[i].name,mn) && strstr(ops[i].form,"imm8") && match_form(&ops[i],a,b,two))
+                return &ops[i];
+        }
+    }
+    for(i=0;i<nop;i++) {
+        if (!strcmp(ops[i].name,mn) && match_form(&ops[i],a,b,two))
+            return &ops[i];
+    }
+    return NULL;
+}
+void emit_byte(Code *c,unsigned int v) {
+    if (c->count < MAX_BYTES)
+        c->bytes[c->count++] = v & 0xff;
+}
+void emit_le(Code *c,unsigned long v,int size) {
+    int i;
+    for (i=0;i<size;i++)
+        emit_byte(c,(v >> (8*i)) & 0xff);
+}
+void emit_opcode(const char *opcode,Code *c) {
+    char t[32];
+    char *plus;
+    int i;
+    strcpy(t,opcode);
+    trim(t);
+    plus = strstr(t,"+rd");
+    if (plus) {
+        char base[16];
+        int n = plus-t;
+        strncpy(base,t,n);
+        base[n] = '\0';
+        emit_byte(c,strtoul(base,NULL,16));
+        return;
+    }
+    for (i=0;t[i];i+=2) {
+        char x[3];
+        x[0] = t[i];
+        x[1] = t[i+1];
+        x[2] = '\0';
+        emit_byte(c,strtoul(x,NULL,16));
+    }
+}
+void memory_modrm(Operand *o,int *mod,int *rm,int *has_sib,int *sib,int *disp_size) {
+    int base;
+    int index;
+    int scale;
+    *has_sib = 0;
+    *sib = 0;
+    if (o->base < 0) {
+        *mod = 0;
+        *rm = 5;
+        *disp_size = 4;
+        return;
+    }
+    if (o->base == 4 || o->index >= 0) {
+        *has_sib = 1;
+        base = o->base;
+        index = o->index;
+        if (base < 0)
+            base = 5;
+        if (index < 0)
+            index = 4;
+        if (o->scale == 1)
+            scale = 0;
+        else if (o->scale == 2)
+            scale = 1;
+        else if (o->scale == 4)
+            scale = 2;
+        else
+            scale = 3;
+        *sib = (scale<<6) | (index<<3) | base;
+        *rm = 4;
+    }
+    else {
+        *rm = o->base;
+    }
+    if (!o->has_disp) {
+        if(o->base == 5) {
+            *mod = 1;
+            *disp_size = 1;
+        }
+        else {
+            *mod = 0;
+            *disp_size = 0;
+        }
+        return;
+    }
+    if(o->disp >= -128 &&
+        o->disp <= 127) {
+        *mod = 1;
+        *disp_size = 1;
+    }
+    else {
+        *mod = 2;
+        *disp_size = 4;
+    }
+}
+int reg_field(const Op *op,
+              Operand *a,
+              Operand *b) {
+    if (op->field[0] == '/' &&
+        isdigit((unsigned char)op->field[1]))
+        return op->field[1]-'0';
+    if (!strcmp(op->form,"r/m32,r32"))
+        return b->reg;
+    if (!strcmp(op->form,"r32,r/m32"))
+        return a->reg;
+    return 0;
+}
+void make_modrm(const Op *op,Operand *a,Operand *b,Code *c){
+    Operand *rmop;
+    int reg;
+    int mod,rm;
+    int has_sib,sib;
+    int disp_size;
+    reg = reg_field(op,a,b);
+    if(!strcmp(op->form,"r/m32,r32"))
+        rmop = a;
+    else if (!strcmp(op->form,"r32,r/m32"))
+        rmop = b;
+    else
+        rmop = a;
+    if(!strcmp(rmop->kind,"REG")) {
+        mod = 3;
+        rm = rmop->reg;
+        has_sib = 0;
+        sib = 0;
+        disp_size = 0;
+    }
+    else {
+        memory_modrm(rmop,&mod,&rm,&has_sib,&sib,&disp_size);
+    }
+    emit_byte(c,(mod<<6) | (reg<<3) |rm);
+    if(has_sib)
+        emit_byte(c,sib);
+    if(disp_size == 1)
+        emit_byte(c,rmop->disp);
+    else if (disp_size == 4)
+        emit_le(c,rmop->disp,4);
+}
+unsigned long immediate_value(Operand *o) {
+    if(!strcmp(o->kind,"IMM"))
+        return get_number(o->text);
+    return 0;
+}
+void encode(const Op *op,Operand *a,Operand *b,Code *c) {
+    int two = b && b->kind[0];
+    Operand *v;
+    if(strstr(op->opcode,"+rd")) {
+        char base[16];
+        char *p;
+        int n;
+        strcpy(base,op->opcode);
+        p = strstr(base,"+rd");
+        n = p-base;
+        base[n] = '\0';
+        emit_byte(c,strtoul(base,NULL,16) + regcode[a->reg]);
+        if(strstr(op->form,"imm32"))
+            emit_le(c,immediate_value(b),4);
+        else if(strstr(op->form,"imm8"))
+            emit_byte(c,immediate_value(b));
+        return;
+    }
+    emit_opcode(op->opcode,c);
+    if(strstr(op->form,"r/m32"))
+        make_modrm(op,a,b,c);
+    if(strstr(op->imm,"imm8")) {
+        v = two ? b : a;
+        emit_byte(c,immediate_value(v));
+        return;
+    }
+    if(strstr(op->imm,"imm32")) {
+        v = two ? b : a;
+        emit_le(c,immediate_value(v),4);
+        return;
+    }
+    if(strstr(op->imm,"rel8")){
+        emit_byte(c,0);
+        return;
+    }
+    if(strstr(op->imm,"rel32")){
+        emit_le(c,0,4);
+        return;
+    }
+}
+
+int is_data_directive(const char *s) {
+    return !strcmp(s,"db") || !strcmp(s,"dw") || !strcmp(s,"dd") || !strcmp(s,"resb") || !strcmp(s,"resw") || !strcmp(s,"resd");
+}
+
+/* Return the storage width of a NASM data/reservation directive. */
+int directive_width(const char *dir) {
+    if (!strcmp(dir, "db") || !strcmp(dir, "resb")) return 1;
+    if (!strcmp(dir, "dw") || !strcmp(dir, "resw")) return 2;
+    if (!strcmp(dir, "dd") || !strcmp(dir, "resd")) return 4;
+    return 0;
+}
+
+/* Count comma-separated values, respecting quoted strings. */
+int data_item_count(const char *text) {
+    int count = 0, quote = 0, has_item = 0;
+    const char *p;
+    for (p = text; *p; ++p) {
+        if (*p == '\"') quote = !quote;
+        if (!quote && *p == ',') {
+            if (has_item) count++;
+            has_item = 0;
+        } else if (!isspace((unsigned char)*p)) {
+            has_item = 1;
+        }
+    }
+    if (has_item) count++;
+    return count;
+}
+
+/* Keep declared initial values readable in the symbol table, e.g. 4,8. */
+void format_symbol_value(const char *dir, const char *rest, char *out, size_t out_size) {
+    char temp[MAX_LINE];
+    size_t j = 0;
+    int quote = 0;
+    const char *p;
+    if (!strncmp(dir, "res", 3)) {
+        snprintf(out, out_size, "{}");
+        return;
+    }
+    snprintf(temp, sizeof(temp), "%s", rest);
+    trim(temp);
+    for (p = temp; *p && j + 1 < out_size; ++p) {
+        if (*p == '\"') quote = !quote;
+        if (!isspace((unsigned char)*p) || quote)
+            out[j++] = *p;
+    }
+    out[j] = '\0';
+    if (!out[0]) snprintf(out, out_size, "{}");
+}
+
+/* Add a symbol that is declared external or referenced but not defined yet. */
+void add_undefined_symbol(const char *name) {
+    int i;
+    if (!name || !name[0]) return;
+
+    for (i = 0; i < nsymbols; ++i) {
+        if (!strcmp(symbols[i].name, name))
+            return; /* Keep an existing definition, if one already exists. */
+    }
+    if (nsymbols >= MAX_SYMBOLS) return;
+
+    snprintf(symbols[nsymbols].name, sizeof(symbols[nsymbols].name), "%s", name);
+    symbols[nsymbols].size = 0;
+    snprintf(symbols[nsymbols].value, sizeof(symbols[nsymbols].value), "{}");
+    symbols[nsymbols].section = '-'; /* Not defined in a local section. */
+    symbols[nsymbols].address = 0;
+    symbols[nsymbols].status = 'U';
+    symbols[nsymbols].is_instruction = 0;
+    nsymbols++;
+}
+
+void add_data_symbol(const char *name, const char *dir, const char *rest,
+                     char section, unsigned int address) {
+    int width = directive_width(dir);
+    int size;
+    int i;
+    char value[256];
+    if (!name[0] || !width) return;
+
+    /* If an earlier reference marked this symbol U, replace it with its definition. */
+    for (i = 0; i < nsymbols; ++i) {
+        if (!strcmp(symbols[i].name, name)) {
+            if (symbols[i].status == 'D') return;
+            break;
+        }
+    }
+    if (i == nsymbols && nsymbols >= MAX_SYMBOLS) return;
+
+    if (!strncmp(dir, "res", 3)) {
+        long n = get_number(rest);
+        if (n < 0) n = 0;
+        size = (int)(n * width);
+    } else if (!strcmp(dir, "db") && strchr(rest, '\"')) {
+        /* Strings occupy their character count; comma-separated items are also supported. */
+        size = 0;
+        {
+            const char *p = rest;
+            while (*p) {
+                if (*p == '\"') {
+                    ++p;
+                    while (*p && *p != '\"') { size++; ++p; }
+                    if (*p) ++p;
+                } else if (*p == ',') {
+                    ++p;
+                } else if (!isspace((unsigned char)*p)) {
+                    char token[128];
+                    int k = 0;
+                    while (*p && *p != ',' && !isspace((unsigned char)*p)) {
+                        if (k < (int)sizeof(token)-1) token[k++] = *p;
+                        ++p;
+                    }
+                    token[k] = '\0';
+                    if (is_number(token)) size += width;
+                } else ++p;
+            }
+        }
+    } else {
+        size = data_item_count(rest) * width;
+    }
+    format_symbol_value(dir, rest, value, sizeof(value));
+    if (i < nsymbols) {
+        /* Convert an existing U entry into a defined symbol without changing its ID. */
+        snprintf(symbols[i].name, sizeof(symbols[i].name), "%s", name);
+        symbols[i].size = size;
+        snprintf(symbols[i].value, sizeof(symbols[i].value), "%s", value);
+        symbols[i].section = section;
+        symbols[i].address = address;
+        symbols[i].status = 'D';
+    } else {
+        snprintf(symbols[nsymbols].name, sizeof(symbols[nsymbols].name), "%s", name);
+        symbols[nsymbols].size = size;
+        snprintf(symbols[nsymbols].value, sizeof(symbols[nsymbols].value), "%s", value);
+        symbols[nsymbols].section = section;
+        symbols[nsymbols].address = address;
+        symbols[nsymbols].status = 'D';
+        symbols[nsymbols].is_instruction = 0;
+        nsymbols++;
+    }
+}
+
+void collect_data_symbol(const char *source_line, char section,
+                         unsigned int address) {
+    char t[MAX_LINE], first[128] = "", second[128] = "", rest[MAX_LINE] = "";
+    char *colon;
+    snprintf(t, sizeof(t), "%s", source_line);
+    trim(t);
+    colon = strchr(t, ':');
+    if (colon) {
+        *colon = '\0';
+        trim(t);
+        if (t[0]) {
+            char label[128];
+            snprintf(label, sizeof(label), "%s", t);
+            trim(colon + 1);
+            if (sscanf(colon + 1, "%127s %511[^\n]", second, rest) == 2) {
+                lower(second);
+                if (is_data_directive(second)) add_data_symbol(label, second, rest, section, address);
+            } else if (sscanf(colon + 1, "%127s", second) == 1) {
+                lower(second);
+                if (is_data_directive(second)) add_data_symbol(label, second, "", section, address);
+            }
+            return;
+        }
+    }
+    if (sscanf(t, "%127s %127s %511[^\n]", first, second, rest) >= 2) {
+        lower(second);
+        if (is_data_directive(second)) add_data_symbol(first, second, rest, section, address);
+    }
+}
+
+/* Add a label in the text section to the combined symbol/instruction table. */
+void add_text_label(const char *name, unsigned int address) {
+    int i;
+    if (!name || !name[0]) return;
+    for (i = 0; i < nsymbols; ++i) {
+        if (!strcmp(symbols[i].name, name)) {
+            if (symbols[i].status == 'U') {
+                symbols[i].size = 0;
+                snprintf(symbols[i].value, sizeof(symbols[i].value), "{}");
+                symbols[i].section = 'T';
+                symbols[i].address = address;
+                symbols[i].status = 'D';
+                symbols[i].is_instruction = 0;
+            }
+            return;
+        }
+    }
+    if (nsymbols >= MAX_SYMBOLS) return;
+    snprintf(symbols[nsymbols].name, sizeof(symbols[nsymbols].name), "%s", name);
+    symbols[nsymbols].size = 0;
+    snprintf(symbols[nsymbols].value, sizeof(symbols[nsymbols].value), "{}");
+    symbols[nsymbols].section = 'T';
+    symbols[nsymbols].address = address;
+    symbols[nsymbols].status = 'D';
+    symbols[nsymbols].is_instruction = 0;
+    nsymbols++;
+}
+
+/* EQU symbols are constants: size is zero because they allocate no storage. */
+void collect_equ_symbol(const char *line, char section, unsigned int current_address) {
+    char t[MAX_LINE], name[128] = "", directive[32] = "", expr[256] = "";
+    char value[256] = "{}";
+    char *colon;
+    long result = 0;
+    int found = 0, i;
+    snprintf(t, sizeof(t), "%s", line);
+    trim(t);
+    colon = strchr(t, ':');
+    if (colon) { /* labels may also precede an EQU directive */
+        *colon = '\0';
+        trim(t);
+        snprintf(name, sizeof(name), "%s", t);
+        snprintf(t, sizeof(t), "%s", colon + 1);
+        trim(t);
+        if (sscanf(t, "%31s %255[^\n]", directive, expr) < 1) return;
+    } else {
+        if (sscanf(t, "%127s %31s %255[^\n]", name, directive, expr) < 2) return;
+    }
+    lower(directive);
+    if (strcmp(directive, "equ") != 0 || !name[0]) return;
+    trim(expr);
+    /* Support the common NASM expression used here: EQU $-previous_symbol. */
+    if (expr[0] == '$' && expr[1] == '-') {
+        char target[128];
+        snprintf(target, sizeof(target), "%s", expr + 2);
+        trim(target);
+        for (i = 0; i < nsymbols; ++i) {
+            if (!strcmp(symbols[i].name, target) && symbols[i].status == 'D') {
+                result = (long)current_address - (long)symbols[i].address;
+                found = 1;
+                break;
+            }
+        }
+    } else if (is_number(expr)) {
+        result = get_number(expr);
+        found = 1;
+    }
+    if (found) snprintf(value, sizeof(value), "%ld", result);
+    for (i = 0; i < nsymbols; ++i) {
+        if (!strcmp(symbols[i].name, name)) {
+            snprintf(symbols[i].value, sizeof(symbols[i].value), "%s", value);
+            symbols[i].size = 0;
+            symbols[i].section = section;
+            symbols[i].address = current_address;
+            symbols[i].status = 'D';
+            symbols[i].is_instruction = 0;
+            return;
+        }
+    }
+    if (nsymbols >= MAX_SYMBOLS) return;
+    snprintf(symbols[nsymbols].name, sizeof(symbols[nsymbols].name), "%s", name);
+    symbols[nsymbols].size = 0;
+    snprintf(symbols[nsymbols].value, sizeof(symbols[nsymbols].value), "%s", value);
+    symbols[nsymbols].section = section;
+    symbols[nsymbols].address = current_address;
+    symbols[nsymbols].status = 'D';
+    symbols[nsymbols].is_instruction = 0;
+    nsymbols++;
+}
+
+/* Add one row for every source instruction, including its emitted machine bytes. */
+void add_instruction_entry(const char *source, const Code *code, unsigned int address) {
+    char name[128], value[256];
+    int i, n = 0;
+    snprintf(name, sizeof(name), "%s", source);
+    trim(name);
+    if (!name[0]) return;
+    for (i = 0; i < code->count && n + 2 < (int)sizeof(value); ++i)
+        n += snprintf(value + n, sizeof(value) - (size_t)n, "%02X", code->bytes[i]);
+    if (code->count == 0) snprintf(value, sizeof(value), "??");
+    if (nsymbols >= MAX_SYMBOLS) return;
+    snprintf(symbols[nsymbols].name, sizeof(symbols[nsymbols].name), "%s", name);
+    symbols[nsymbols].size = code->count;
+    snprintf(symbols[nsymbols].value, sizeof(symbols[nsymbols].value), "%s", value);
+    symbols[nsymbols].section = 'T';
+    symbols[nsymbols].address = address;
+    symbols[nsymbols].status = 'D';
+    symbols[nsymbols].is_instruction = 1;
+    nsymbols++;
+}
+
+void write_symbol_table(const char *filename) {
+    FILE *fp = fopen(filename, "w");
+    int i;
+    if (!fp) {
+        perror(filename);
+        return;
+    }
+    fprintf(fp, "id | name | size | value | section | address | status\n");
+    for (i = 0; i < nsymbols; ++i) {
+        fprintf(fp, "%d | %s | %d | %s | %c | %u | %c\n",
+                i + 1, symbols[i].name, symbols[i].size, symbols[i].value,
+                symbols[i].section, symbols[i].address, symbols[i].status);
+    }
+    fclose(fp);
+}
+void emit_data(const char *dir,char *rest,Code *c){
+    int size;
+    char *p = rest;
+    if(!strcmp(dir,"db"))
+        size = 1;
+    else if(!strcmp(dir,"dw"))
+        size = 2;
+    else
+        size = 4;
+    if(!strcmp(dir,"resb") || !strcmp(dir,"resw") || !strcmp(dir,"resd"))
+        return;
+
+    while(*p){
+        while(isspace((unsigned char)*p) || *p == ',')
+            p++;
+        if(!*p)
+            break;
+        if(*p == '"') {
+            p++;
+            while (*p && *p != '"') {
+                emit_byte(c,*p);
+                p++;
+            }
+            if(*p)
+                p++;
+            continue;
+        }
+        {
+            char token[128];
+            int i=0;
+            while (*p && *p != ',') {
+                if (i < 127)
+                    token[i++] = *p;
+                p++;
+            }
+            token[i] = '\0';
+            trim(token);
+            if (is_number(token))
+                emit_le(c,get_number(token),size);
+        }
+    }
+}
+
+int process_data(char *line,Code *c) {
+    char t[MAX_LINE];
+    char first[64];
+    char second[64];
+    char rest[MAX_LINE];
+    strcpy(t,line);
+    trim(t);
+    {
+        char *colon = strchr(t,':');
+        if (colon) {
+            memmove(t,colon+1,strlen(colon+1)+1);
+            trim(t);
+        }
+    }
+    if (sscanf(t,
+               "%63s %63s %511[^\n]",
+               first,
+               second,
+               rest) == 3) {
+        lower(first);
+        lower(second);
+        if (is_data_directive(second)) {
+            if (strcmp(second,"resb") && strcmp(second,"resw") && strcmp(second,"resd"))
+                emit_data(second,rest,c);
+            return 1;
+        }
+    }
+    if (sscanf(t,"%63s %511[^\n]",first,rest) == 2){
+        lower(first);
+        if (is_data_directive(first)){
+            if (strcmp(first,"resb") && strcmp(first,"resw") && strcmp(first,"resd"))
+                emit_data(first,rest,c);
+            return 1;
+        }
+    }
+    return 0;
+}
+void print_code(Code *c,unsigned int address) {
+    int i;
+    if (!c->count) {
+        printf("??");
+        return;
+    }
+    for (i=0;i<c->count;i++) {
+        if (i && i%8==0)
+            printf("\n%08X  ",address+i);
+        printf("%02X",c->bytes[i]);
+    }
+}
+
+/* Print one listing row with fixed-width columns. Long byte sequences are
+ * continued on following rows so FLAGS and SOURCE remain aligned. */
+static void print_listing_row(unsigned int address, const Code *code,
+                              const char *flags, const char *source) {
+    char addr[32];
+    int i, start = 0;
+    snprintf(addr, sizeof(addr), "%08X", address);
+    if (!code || code->count <= 0) {
+        const char *empty_bytes = code ? "??" : "--";
+        printf("%-10s %-34s %-30s %s", addr, empty_bytes, flags ? flags : "None",
+               source ? source : "");
+        if (!source || !strchr(source, '\n')) putchar('\n');
+        return;
+    }
+    while (start < code->count) {
+        char bytes[33];
+        int n = 0, end = start + 16;
+        if (end > code->count) end = code->count;
+        for (i = start; i < end; ++i)
+            n += snprintf(bytes + n, sizeof(bytes) - (size_t)n, "%02X", code->bytes[i]);
+        bytes[n] = '\0';
+        if (start == 0) {
+            printf("%-10s %-34s %-30s %s", addr, bytes, flags ? flags : "None",
+                   source ? source : "");
+            if (!source || !strchr(source, '\n')) putchar('\n');
+        } else {
+            printf("%-10s %-34s %-30s\n", "", bytes, "");
+        }
+        start = end;
+    }
+}
+
+unsigned int calculate_address(unsigned int base,int index,int size){
+    return base + index * size;
+}
+int reserved_size(char *line){
+    char t[MAX_LINE];
+    char first[64];
+    char second[64];
+    char rest[MAX_LINE];
+    long n;
+    int size=0;
+    strcpy(t,line);
+    trim(t);
+    {
+        char *colon = strchr(t,':');
+        if (colon) {
+            memmove(t,colon+1,strlen(colon+1)+1);
+            trim(t);
+        }
+    }
+    if (sscanf(t,"%63s %63s %511[^\n]",first,second,rest) == 3) {
+        lower(first);
+        lower(second);
+        if (!strcmp(second,"resb"))
+            size=1;
+        else if (!strcmp(second,"resw"))
+            size=2;
+        else if (!strcmp(second,"resd"))
+            size=4;
+        if (size) {
+            n=get_number(rest);
+            return n*size;
+        }
+    }
+    if (sscanf(t,"%63s %511[^\n]",first,rest) == 2) {
+        lower(first);
+        if (!strcmp(first,"resb"))
+            size=1;
+        else if (!strcmp(first,"resw"))
+            size=2;
+        else if (!strcmp(first,"resd"))
+            size=4;
+        if (size) {
+            n=get_number(rest);
+            return n*size;
+        }
+    }
+    return 0;
+}
+/*
+ * Static IA-32 EFLAGS metadata. This describes architectural flag effects;
+ * it does NOT execute instructions or calculate runtime EFLAGS values.
+ * Unknown instructions are marked unknown rather than guessed.
+ */
+void get_flag_metadata(const char *mnemonic, char *modified, size_t msz,
+                       char *checked, size_t csz, char *note, size_t nsz) {
+    const char *m = "None", *c = "None", *n = "Does not modify or test EFLAGS flags";
+    char mn[64];
+    snprintf(mn, sizeof(mn), "%s", mnemonic);
+    lower(mn);
+
+    if (!strcmp(mn,"mov") || !strcmp(mn,"movzx") || !strcmp(mn,"movsx") ||
+        !strcmp(mn,"lea") || !strcmp(mn,"push") || !strcmp(mn,"pop") ||
+        !strcmp(mn,"pusha") || !strcmp(mn,"popa") || !strcmp(mn,"call") ||
+        !strcmp(mn,"ret") || !strcmp(mn,"nop") || !strcmp(mn,"int")) {
+        m = "None"; c = "None";
+        n = !strcmp(mn,"int") ? "Interrupt handling may affect execution state; handler-dependent flag results are not modeled" : "Flags preserved by this instruction";
+    } else if (!strcmp(mn,"add") || !strcmp(mn,"sub") || !strcmp(mn,"cmp") ||
+               !strcmp(mn,"adc") || !strcmp(mn,"sbb")) {
+        m = "CF,PF,AF,ZF,SF,OF";
+        n = !strcmp(mn,"cmp") ? "Sets flags like SUB; result is not stored" : "Arithmetic flags updated from operation result";
+    } else if (!strcmp(mn,"inc") || !strcmp(mn,"dec")) {
+        m = "PF,AF,ZF,SF,OF"; n = "CF is preserved";
+    } else if (!strcmp(mn,"and") || !strcmp(mn,"or") || !strcmp(mn,"xor") ||
+               !strcmp(mn,"test")) {
+        m = "CF,PF,ZF,SF,OF; AF undefined";
+        n = !strcmp(mn,"test") ? "Like AND for flags; result is not stored" : "CF and OF cleared; PF/ZF/SF set from result; AF undefined";
+    } else if (!strcmp(mn,"neg")) {
+        m = "CF,PF,AF,ZF,SF,OF"; n = "Arithmetic flags updated by negation";
+    } else if (!strcmp(mn,"mul") || !strcmp(mn,"imul")) {
+        m = "CF,OF; SF,ZF,AF,PF undefined"; n = "CF and OF indicate whether upper half/sign extension is significant";
+    } else if (!strcmp(mn,"div") || !strcmp(mn,"idiv")) {
+        m = "CF,OF,SF,ZF,AF,PF undefined"; n = "Flags undefined after division";
+    } else if (!strcmp(mn,"shl") || !strcmp(mn,"sal") || !strcmp(mn,"shr") || !strcmp(mn,"sar")) {
+        m = "CF; SF,ZF,PF; OF conditionally; AF undefined"; n = "Exact effects depend on shift count";
+    } else if (!strcmp(mn,"rol") || !strcmp(mn,"ror") || !strcmp(mn,"rcl") || !strcmp(mn,"rcr")) {
+        m = "CF; OF for count=1"; n = "Rotate flag effects depend on count";
+    } else if (!strcmp(mn,"clc")) { m = "CF (cleared)"; n = "Clears Carry Flag";
+    } else if (!strcmp(mn,"stc")) { m = "CF (set)"; n = "Sets Carry Flag";
+    } else if (!strcmp(mn,"cmc")) { m = "CF (complemented)"; n = "Toggles Carry Flag";
+    } else if (!strcmp(mn,"cld")) { m = "DF (cleared)"; n = "Clears Direction Flag";
+    } else if (!strcmp(mn,"std")) { m = "DF (set)"; n = "Sets Direction Flag";
+    } else if (!strcmp(mn,"cli")) { m = "IF (cleared)"; n = "Privilege restrictions apply";
+    } else if (!strcmp(mn,"sti")) { m = "IF (set)"; n = "Privilege restrictions apply";
+    } else if (!strcmp(mn,"lahf")) { m = "None"; n = "Copies SF,ZF,AF,PF,CF into AH; EFLAGS unchanged";
+    } else if (!strcmp(mn,"sahf")) { m = "SF,ZF,AF,PF,CF"; n = "Loads selected status flags from AH";
+    } else if (!strcmp(mn,"pushf") || !strcmp(mn,"pushfd")) { m = "None"; n = "Pushes EFLAGS value; flags unchanged";
+    } else if (!strcmp(mn,"popf") || !strcmp(mn,"popfd")) { m = "Multiple flags loaded"; n = "Loads flags from stack subject to privilege rules";
+    } else if (!strcmp(mn,"jz") || !strcmp(mn,"je")) { c = "ZF"; n = "Branches when ZF=1";
+    } else if (!strcmp(mn,"jnz") || !strcmp(mn,"jne")) { c = "ZF"; n = "Branches when ZF=0";
+    } else if (!strcmp(mn,"jc") || !strcmp(mn,"jb") || !strcmp(mn,"jnae")) { c = "CF"; n = "Branches when CF=1";
+    } else if (!strcmp(mn,"jnc") || !strcmp(mn,"jae") || !strcmp(mn,"jnb")) { c = "CF"; n = "Branches when CF=0";
+    } else if (!strcmp(mn,"jbe") || !strcmp(mn,"jna")) { c = "CF,ZF"; n = "Branches when CF=1 or ZF=1";
+    } else if (!strcmp(mn,"ja") || !strcmp(mn,"jnbe")) { c = "CF,ZF"; n = "Branches when CF=0 and ZF=0";
+    } else if (!strcmp(mn,"js")) { c = "SF"; n = "Branches when SF=1";
+    } else if (!strcmp(mn,"jns")) { c = "SF"; n = "Branches when SF=0";
+    } else if (!strcmp(mn,"jo")) { c = "OF"; n = "Branches when OF=1";
+    } else if (!strcmp(mn,"jno")) { c = "OF"; n = "Branches when OF=0";
+    } else if (!strcmp(mn,"jp") || !strcmp(mn,"jpe")) { c = "PF"; n = "Branches when PF=1";
+    } else if (!strcmp(mn,"jnp") || !strcmp(mn,"jpo")) { c = "PF"; n = "Branches when PF=0";
+    } else if (!strcmp(mn,"jg") || !strcmp(mn,"jnle")) { c = "ZF,SF,OF"; n = "Signed greater: ZF=0 and SF=OF";
+    } else if (!strcmp(mn,"jge") || !strcmp(mn,"jnl")) { c = "SF,OF"; n = "Signed greater/equal: SF=OF";
+    } else if (!strcmp(mn,"jl") || !strcmp(mn,"jnge")) { c = "SF,OF"; n = "Signed less: SF!=OF";
+    } else if (!strcmp(mn,"jle") || !strcmp(mn,"jng")) { c = "ZF,SF,OF"; n = "Signed less/equal: ZF=1 or SF!=OF";
+    } else if (!strcmp(mn,"loop")) { c = "ECX (not EFLAGS)"; n = "Decrements ECX and branches if nonzero; flags unchanged";
+    } else if (!strcmp(mn,"loope") || !strcmp(mn,"loopz")) { c = "ECX,ZF"; n = "Decrements ECX; branches if ECX!=0 and ZF=1";
+    } else if (!strcmp(mn,"loopne") || !strcmp(mn,"loopnz")) { c = "ECX,ZF"; n = "Decrements ECX; branches if ECX!=0 and ZF=0";
+    } else if (!strcmp(mn,"jecxz")) { c = "ECX (not EFLAGS)"; n = "Branches if ECX=0; flags unchanged";
+    } else if (!strcmp(mn,"cmove") || !strcmp(mn,"cmovz")) { c = "ZF"; n = "Conditional move if ZF=1; move itself preserves flags";
+    } else if (!strcmp(mn,"cmovne") || !strcmp(mn,"cmovnz")) { c = "ZF"; n = "Conditional move if ZF=0; move itself preserves flags";
+    } else if (!strcmp(mn,"seta")) { c = "CF,ZF"; n = "Writes byte if CF=0 and ZF=0; flags unchanged";
+    } else if (!strcmp(mn,"setb") || !strcmp(mn,"setc")) { c = "CF"; n = "Writes byte if CF=1; flags unchanged";
+    } else if (!strcmp(mn,"sete") || !strcmp(mn,"setz")) { c = "ZF"; n = "Writes byte if ZF=1; flags unchanged";
+    } else if (!strcmp(mn,"setne") || !strcmp(mn,"setnz")) { c = "ZF"; n = "Writes byte if ZF=0; flags unchanged";
+    } else if (!strcmp(mn,"setg")) { c = "ZF,SF,OF"; n = "Writes byte if ZF=0 and SF=OF; flags unchanged";
+    } else if (!strcmp(mn,"setl")) { c = "SF,OF"; n = "Writes byte if SF!=OF; flags unchanged";
+    } else if (!strcmp(mn,"int")) { m = "Handler-dependent"; n = "Interrupt/handler behavior is not simulated";
+    } else {
+        m = "Unknown/not modeled"; c = "Unknown/not modeled"; n = "No metadata rule for this mnemonic; no flag behavior inferred";
+    }
+    snprintf(modified, msz, "%s", m);
+    snprintf(checked, csz, "%s", c);
+    snprintf(note, nsz, "%s", n);
+}
+
+void write_flag_metadata_row(FILE *fp, const char *source, const char *mnemonic,
+                             unsigned int address, const Code *code) {
+    char modified[128], checked[128], note[256], bytes[2 * MAX_BYTES + 1];
+    int i, n = 0;
+    get_flag_metadata(mnemonic, modified, sizeof(modified), checked, sizeof(checked), note, sizeof(note));
+    for (i = 0; i < code->count && n + 2 < (int)sizeof(bytes); ++i)
+        n += snprintf(bytes + n, sizeof(bytes) - (size_t)n, "%02X", code->bytes[i]);
+    if (!code->count) snprintf(bytes, sizeof(bytes), "??");
+    fprintf(fp, "%08X | %s | %s | %s | %s | %s | %s\n",
+            address, mnemonic, bytes, modified, checked, note, source);
+}
+
+void process_file(const char *file){
+    FILE *fp;
+    FILE *flagfp;
+    char line[MAX_LINE];
+    char section[32]="";
+    int section_address=0;
+    flagfp = fopen("instruction_flags.txt", "w");
+    if (flagfp) fprintf(flagfp, "address | mnemonic | bytes | flags modified | flags checked | behavior | source\n");
+    fp = fopen(file,"r");
+    if (!fp){
+        perror(file);
+        exit(1);
+    }
+    printf("\n%-10s %-34s %-30s %s\n", "ADDRESS", "HEX BYTES", "FLAGS MODIFIED", "SOURCE");
+    printf("---------------------------------------------------------------------------------------------------------------\n");
+    while (fgets(line,sizeof(line),fp)){
+        char original[MAX_LINE];
+        strcpy(original,line);
+        remove_comment(line);
+        trim(line);
+        if (!line[0])
+            continue;
+        if (!strncmp(line,"section",7)){
+            sscanf(line+7,"%31s",section);
+            lower(section);
+            section_address=0;
+            printf("\n%s\n",section);
+            continue;
+        }
+        if (!strncmp(line,"global ",7) || !strncmp(line,"extern ",7)){
+            if (!strncmp(line, "extern ", 7)) {
+                char names[MAX_LINE];
+                char *token;
+                snprintf(names, sizeof(names), "%s", line + 7);
+                token = strtok(names, ", \t");
+                while (token) {
+                    add_undefined_symbol(token);
+                    token = strtok(NULL, ", \t");
+                }
+            }
+            print_listing_row(0, NULL, "None", original);
+            continue;
+        }
+        if (!strcmp(section,".data") || !strcmp(section,".bss")){
+            Code c={0};
+            unsigned int address=calculate_address(0,section_address,1);
+            collect_data_symbol(line, !strcmp(section, ".data") ? 'D' : 'B', address);
+            collect_equ_symbol(line, !strcmp(section, ".data") ? 'D' : 'B', address);
+            if (process_data(line,&c)){
+                if (c.count){
+                    print_listing_row(address, &c, "None", original);
+                    section_address += c.count;
+                }
+                else{
+                    int size=reserved_size(line);
+                    print_listing_row(address, NULL, "None", original);
+                    section_address += size;
+                }
+            }
+            continue;
+        }
+        {
+            char mn[64];
+            char atext[256];
+            char btext[256];
+            char temp[MAX_LINE];
+            char *colon;
+            char *after;
+            Operand a,b;
+            Code c={0};
+            const Op *op;
+            unsigned int address=calculate_address(0,section_address,1);
+            strcpy(temp,line);
+            colon=strchr(temp,':');
+            if (colon){
+                after=colon+1;
+                trim(after);
+                if (!after[0]){
+                    *colon='\0';
+                    trim(temp);
+                    add_text_label(temp, address);
+                    print_listing_row(address, NULL, "None", original);
+                    continue;
+                }
+                {
+                    char label_name[128];
+                    size_t label_len = (size_t)(colon - temp);
+                    if (label_len >= sizeof(label_name)) label_len = sizeof(label_name) - 1;
+                    memcpy(label_name, temp, label_len);
+                    label_name[label_len] = '\0';
+                    trim(label_name);
+                    add_text_label(label_name, address);
+                }
+            }
+            if (!parse_instruction(line,mn,atext,btext))
+                continue;
+            parse_operand(atext,&a);
+            if (btext[0])
+                parse_operand(btext,&b);
+            else
+                init_operand(&b);
+            /* Collect symbol references for U status without changing encoding. */
+            if (!strcmp(a.kind, "SYM")) add_undefined_symbol(a.text);
+            if (btext[0] && !strcmp(b.kind, "SYM")) add_undefined_symbol(b.text);
+            op = find_instruction(mn,&a,&b,btext[0] != '\0');
+            {
+                char modified[128], checked[128], note[256];
+                get_flag_metadata(mn, modified, sizeof(modified),
+                                  checked, sizeof(checked), note, sizeof(note));
+                if(op){
+                    encode(op,&a,&b,&c);
+                    section_address += c.count;
+                }
+                add_instruction_entry(line, &c, address);
+                if (flagfp) write_flag_metadata_row(flagfp, line, mn, address, &c);
+                if (!op) {
+                    Code unknown = {0};
+                    print_listing_row(address, &unknown, "Unknown/not modeled", original);
+                } else {
+                    print_listing_row(address, &c, modified, original);
+                }
+            }
+        }
+    }
+    fclose(fp);
+    if (flagfp) fclose(flagfp);
+    write_symbol_table("symbol_table.txt");
+}
+int main(int argc,char *argv[]){
+    if (argc != 3){
+        printf(
+            "Usage: %s program.asm Instruction_Byte_Diagram.txt\n",
+            argv[0]
+        );
+        return 1;
+    }
+    load_instruction_set(argv[2]);
+    process_file(argv[1]);
+    return 0;
+}
+
