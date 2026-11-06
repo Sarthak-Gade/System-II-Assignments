@@ -1,0 +1,117 @@
+IA-32 PREDEFINED ERROR CATALOGUE
+Version: 1.0
+Format: pipe-separated records
+This file is read by the assembler. It is not an assembly source file.
+
+IMPORTANT:
+- Keep the [ERROR_DEFINITIONS] and [END_ERROR_DEFINITIONS] markers.
+- Each record must contain exactly five fields:
+  CODE|CATEGORY|NAME|DESCRIPTION|STAGE
+- Do not use the pipe character (|) inside a field.
+- The assembler should ignore blank lines and lines beginning with #.
+
+[ERROR_DEFINITIONS]
+E001|SOURCE|Source file unavailable|Assembly source cannot be opened or read|SCAN
+E002|SOURCE|Invalid character|Character is not valid in supported source syntax|SCAN
+E003|SOURCE|Line too long|Source line exceeds the configured maximum length|SCAN
+E004|SOURCE|Unterminated string|Quoted string has no matching closing quote|SCAN
+E005|SOURCE|Invalid string constant|String contains an unsupported character or escape|SCAN
+E006|SOURCE|Malformed comment|Comment syntax is malformed|SCAN
+E007|SOURCE|Too many tokens|Source line exceeds supported token count|SCAN
+E008|SOURCE|Invalid token|Token cannot be classified by the lexer|SCAN
+
+E101|SYMBOL|Invalid symbol name|Symbol does not follow identifier rules|SCAN
+E102|SYMBOL|Duplicate definition|Symbol is defined more than once|PASS1
+E103|SYMBOL|Undefined symbol|Referenced symbol is never defined|FINAL
+E104|SYMBOL|Invalid label syntax|Label declaration is malformed|SCAN
+E105|SYMBOL|Invalid label placement|Label is not valid in this source context|SCAN
+E106|SYMBOL|Invalid EQU expression|EQU expression is malformed or unsupported|PASS1
+E107|SYMBOL|EQU redefinition|EQU symbol is defined more than once|PASS1
+E108|SYMBOL|EQU value unavailable|EQU expression cannot be evaluated|PASS1
+E109|SYMBOL|Invalid EXTERN declaration|EXTERN declaration is malformed|PASS1
+E110|SYMBOL|External also defined|External symbol is also locally defined|PASS1
+E111|SYMBOL|External relocation unavailable|Raw binary cannot resolve external relocation|FINAL
+E112|SYMBOL|Symbol type conflict|Symbol has conflicting kinds of definitions|PASS1
+
+E201|SECTION|Missing section|Required section is missing for selected mode|FINAL
+E202|SECTION|Invalid section name|Section name is not supported|PASS1
+E203|SECTION|Invalid section transition|Section declaration or section state is malformed|PASS1
+E204|DIRECTIVE|Unknown directive|Directive is not recognized|SCAN
+E205|DIRECTIVE|Invalid directive operands|Directive has missing, extra, or invalid operands|PASS1
+E206|DIRECTIVE|Invalid data declaration|DB DW or DD declaration is malformed|PASS1
+E207|DIRECTIVE|Data value out of range|Initializer does not fit declared width|PASS1
+E208|DIRECTIVE|Invalid reserve count|RES count is negative or malformed|PASS1
+E209|DIRECTIVE|Reserve size overflow|Reserved size exceeds supported address range|PASS1
+E210|DIRECTIVE|Invalid alignment|ALIGN value is invalid|PASS1
+E211|DIRECTIVE|Invalid ORG value|ORG expression is invalid or out of range|PASS1
+E212|DIRECTIVE|Unsupported directive|Directive is valid elsewhere but unsupported here|SCAN
+E213|DIRECTIVE|Invalid GLOBAL declaration|GLOBAL declaration is malformed|PASS1
+E214|DIRECTIVE|Duplicate section declaration|Section declaration is duplicated where forbidden|PASS1
+
+E301|INSTRUCTION|Unknown mnemonic|Mnemonic is absent from loaded opcode table|SCAN
+E302|INSTRUCTION|Unsupported instruction form|Mnemonic exists but operand form is unsupported|PASS2
+E303|INSTRUCTION|Wrong operand count|Instruction has too few or too many operands|SCAN
+E304|OPERAND|Invalid operand|Operand cannot be parsed as a supported operand|PASS2
+E305|OPERAND|Invalid register|Register is not valid for selected IA-32 mode|PASS2
+E306|OPERAND|Register width mismatch|Register operands have incompatible widths|PASS2
+E307|OPERAND|Operand size mismatch|Operand sizes conflict|PASS2
+E308|OPERAND|Memory to memory operation|Instruction form does not allow two memory operands|PASS2
+E309|OPERAND|Invalid memory expression|Memory base index scale or displacement is malformed|PASS2
+E310|OPERAND|Invalid scale factor|SIB scale must be 1 2 4 or 8|PASS2
+E311|OPERAND|Invalid index register|ESP cannot be used as a normal SIB index|PASS2
+E312|OPERAND|Invalid address register|Address register is unsupported in 32-bit mode|PASS2
+E313|OPERAND|Immediate out of range|Immediate does not fit encoded field|PASS2
+E314|OPERAND|Displacement out of range|Displacement does not fit selected field|PASS2
+E315|OPERAND|Invalid expression|Operand expression is malformed or unsupported|PASS2
+E316|OPERAND|Missing size qualifier|Memory size cannot be inferred when required|PASS2
+E317|OPERAND|Invalid size qualifier|Size qualifier is malformed or conflicts|PASS2
+E318|OPERAND|Invalid operand combination|Operand combination has no matching encoding|PASS2
+
+E401|TIT|Unresolved forward reference|Incomplete instruction remains after final resolution|FINAL
+E402|TIT|Invalid patch location|Patch location is outside object buffer|PASS2
+E403|TIT|Patch size mismatch|Reserved displacement size differs from required size|PASS2
+E404|BRANCH|Relative target out of range|Target cannot fit selected relative displacement|PASS2
+E405|BRANCH|Invalid branch target|Branch target is not a valid code symbol|PASS2
+E406|BRANCH|Unsupported relocation|Raw binary cannot represent required relocation|FINAL
+E407|BRANCH|Invalid relative expression|Relative target expression cannot be evaluated|PASS2
+
+E501|ENCODING|No matching opcode entry|No opcode row matches mnemonic and operands|PASS2
+E502|ENCODING|Invalid opcode definition|Opcode table entry is malformed|PASS1
+E503|ENCODING|Missing encoding metadata|Opcode row lacks required encoding information|PASS1
+E504|ENCODING|Instruction size unknown|Instruction size cannot be determined|PASS1
+E505|ENCODING|Instruction too large|Instruction exceeds IA-32 maximum length of 15 bytes|PASS2
+E506|ENCODING|ModRM encoding failure|ModRM fields cannot be generated|PASS2
+E507|ENCODING|SIB encoding failure|SIB fields cannot be generated|PASS2
+E508|ENCODING|Pass size mismatch|Pass 1 and Pass 2 instruction sizes differ|PASS2
+E509|ENCODING|Output buffer overflow|Generated bytes exceed available buffer|PASS2
+E510|OUTPUT|Cannot create object file|Object output file cannot be created|FINAL
+E511|OUTPUT|Cannot write object file|Object bytes cannot be completely written|FINAL
+E512|OUTPUT|Invalid output layout|Section layout cannot be represented in raw binary|FINAL
+E513|OPCODE|Empty or invalid opcode table|Opcode file contains no usable definitions|PASS1
+
+E601|TABLE|Symbol table capacity exceeded|Symbol table cannot accept another entry|PASS1
+E602|TABLE|Opcode table capacity exceeded|Opcode table cannot accept another entry|PASS1
+E603|TABLE|TIT capacity exceeded|TIT cannot accept another incomplete instruction|PASS1
+E604|TABLE|Duplicate opcode definition|Conflicting opcode definitions exist|PASS1
+E605|TABLE|Duplicate TIT patch|Same patch location is registered more than once|PASS1
+E606|TABLE|Inconsistent symbol state|Symbol status conflicts with definitions and references|FINAL
+E607|INTERNAL|Pass address mismatch|Pass 1 and Pass 2 section offsets differ|PASS2
+E608|INTERNAL|Invalid internal state|Assembler detected an impossible internal state|PASS1
+E609|INTERNAL|Memory allocation failure|Dynamic memory allocation failed|ANY
+E610|INPUT|Opcode table read error|Opcode table could not be read completely|SCAN
+[END_ERROR_DEFINITIONS]
+
+ERROR HANDLING NOTES
+1. A forward reference is not an error when first encountered. Add it to the
+   symbol table as U and add an appropriate TIT record. Report E401/E103 only
+   if it remains unresolved after final resolution.
+2. An EXTERN symbol is not automatically an error. A use requiring a linker
+   relocation is unsupported by raw flat-binary output and should be reported.
+3. An unknown mnemonic means it is absent from this assembler's loaded opcode
+   definitions; it does not necessarily mean the CPU architecture lacks it.
+4. Report the root cause and avoid cascading duplicate diagnostics.
+5. Each occurrence should record error code, source line number, source text,
+   and a useful detail.
+6. This catalogue is extensible. Add a record using the same five-field format.
+7. The catalogue is a practical subset. Add checks as instruction and directive
+   support grows.
